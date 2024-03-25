@@ -1,0 +1,5 @@
+defaults:
+  - data: alpaca
+  - alignment: ppo
+  - peft: llora
+  - model: tiny_llama

@@ -1,0 +1,2 @@
+path: tatsu-lab/alpaca
+preprocessing_num_workers: "8"
