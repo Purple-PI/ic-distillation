@@ -12,7 +12,7 @@ Faire un script `set_env_a100.sh`:
 ```bash
 module purge
 module load cpuarch/amd
-module load pytorch-gpu/py3/2.1.1
+module load pytorch-gpu/py3/2.2.0
 
 export PYTHONUSERBASE="/gpfsscratch/rech/vfy/uhx66kd/env/ic-distillation"
 export PYTHONPATH=$PYTHONPATH:$PYTHONUSERBASE
