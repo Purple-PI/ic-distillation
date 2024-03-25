@@ -1,0 +1,22 @@
+[tool.poetry]
+name = "ic-distillation"
+version = "0.1.0"
+description = ""
+authors = ["Your Name <you@example.com>"]
+readme = "README.md"
+
+[tool.poetry.dependencies]
+python = ">=3.9,<4.0"
+black = "^24.3.0"
+isort = "^5.13.2"
+transformers = "^4.39.1"
+trl = "^0.8.1"
+peft = "^0.10.0"
+ipdb = "^0.13.13"
+wandb = "^0.16.4"
+deepspeed = "^0.14.0"
+
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"

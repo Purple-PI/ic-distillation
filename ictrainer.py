@@ -36,8 +36,16 @@ from transformers import (
     PreTrainedTokenizerBase,
     PreTrainedTokenizerFast,
 )
+from trl import (
+    AdaptiveKLController,
+    BaseTrainer,
+    FixedKLController,
+    PPOConfig,
+    RunningMoments,
+)
+
 # trl lib
-from ..core import (
+from trl.core import (
     WANDB_PADDING,
     PPODecorators,
     clip_by_value,
@@ -52,10 +60,12 @@ from ..core import (
     stack_dicts,
     stats_to_np,
 )
-from ..import_utils import is_npu_available, is_torch_greater_2_0, is_xpu_available
-from ..models import SUPPORTED_ARCHITECTURES, PreTrainedModelWrapper, create_reference_model
-from . import AdaptiveKLController, BaseTrainer, FixedKLController, PPOConfig, RunningMoments
-
+from trl.import_utils import is_npu_available, is_torch_greater_2_0, is_xpu_available
+from trl.models import (
+    SUPPORTED_ARCHITECTURES,
+    PreTrainedModelWrapper,
+    create_reference_model,
+)
 
 if is_deepspeed_available():
     import deepspeed
@@ -204,7 +214,9 @@ class ICTrainer(BaseTrainer):
 
         # Step 1.1 Runtime variables filled by the accelerator
         config.world_size = self.accelerator.num_processes
-        config.global_backward_batch_size = config.backward_batch_size * config.world_size
+        config.global_backward_batch_size = (
+            config.backward_batch_size * config.world_size
+        )
         config.global_batch_size = config.batch_size * config.world_size
 
         self.model = model
@@ -214,10 +226,16 @@ class ICTrainer(BaseTrainer):
         config.is_encoder_decoder = self.is_encoder_decoder
         config.is_peft_model = self.is_peft_model
 
-        is_using_tensorboard = config.log_with is not None and config.log_with == "tensorboard"
+        is_using_tensorboard = (
+            config.log_with is not None and config.log_with == "tensorboard"
+        )
         self.accelerator.init_trackers(
             config.tracker_project_name,
-            config=dict(trl_ppo_trainer_config=config.to_dict()) if not is_using_tensorboard else config.to_dict(),
+            config=(
+                dict(trl_ppo_trainer_config=config.to_dict())
+                if not is_using_tensorboard
+                else config.to_dict()
+            ),
             init_kwargs=config.tracker_kwargs,
         )
         self.is_using_text_environment = getattr(config, "use_text_environment", False)
@@ -231,7 +249,9 @@ class ICTrainer(BaseTrainer):
                     UserWarning,
                 )
         elif ref_model is None and not self.is_peft_model:
-            self.ref_model = create_reference_model(self.model, num_shared_layers=num_shared_layers)
+            self.ref_model = create_reference_model(
+                self.model, num_shared_layers=num_shared_layers
+            )
         elif self.is_peft_model:
             self.ref_model = None
         else:
@@ -245,14 +265,22 @@ class ICTrainer(BaseTrainer):
             else nullcontext
         )
 
-        if not (isinstance(tokenizer, PreTrainedTokenizer) or isinstance(tokenizer, PreTrainedTokenizerFast)):
+        if not (
+            isinstance(tokenizer, PreTrainedTokenizer)
+            or isinstance(tokenizer, PreTrainedTokenizerFast)
+        ):
             raise ValueError(
                 "tokenizer must be a transformers.PreTrainedTokenizer or transformers.PreTrainedTokenizerFast"
             )
         self.tokenizer = tokenizer
 
-        if dataset is not None and not (isinstance(dataset, torch.utils.data.Dataset) or isinstance(dataset, Dataset)):
-            raise ValueError("dataset must be a torch.utils.data.Dataset or datasets.Dataset")
+        if dataset is not None and not (
+            isinstance(dataset, torch.utils.data.Dataset)
+            or isinstance(dataset, Dataset)
+        ):
+            raise ValueError(
+                "dataset must be a torch.utils.data.Dataset or datasets.Dataset"
+            )
         elif dataset is None:
             warnings.warn(
                 "No dataset is provided. Make sure to set config.batch_size to the correct value before training.",
@@ -298,13 +326,16 @@ class ICTrainer(BaseTrainer):
                 )
 
         if self.config.adap_kl_ctrl:
-            self.kl_ctl = AdaptiveKLController(self.config.init_kl_coef, self.config.target, self.config.horizon)
+            self.kl_ctl = AdaptiveKLController(
+                self.config.init_kl_coef, self.config.target, self.config.horizon
+            )
         else:
             self.kl_ctl = FixedKLController(self.config.init_kl_coef)
 
         # Safety checkers for DS integration
-        is_deepspeed_used = self.accelerator.distributed_type == "DEEPSPEED" and hasattr(
-            self.accelerator.state, "deepspeed_plugin"
+        is_deepspeed_used = (
+            self.accelerator.distributed_type == "DEEPSPEED"
+            and hasattr(self.accelerator.state, "deepspeed_plugin")
         )
 
         (
@@ -341,7 +372,9 @@ class ICTrainer(BaseTrainer):
         # init variables for pushing model to hub
         if config.push_to_hub_if_best_kwargs:
             if "repo_id" not in config.push_to_hub_if_best_kwargs:
-                raise ValueError("You have to specify repo_id in order to push the model to the hub!")
+                raise ValueError(
+                    "You have to specify repo_id in order to push the model to the hub!"
+                )
             self.push_to_hub_kwargs = config.push_to_hub_if_best_kwargs
             self.compare_step = 0
             self.highest_reward = torch.tensor(-float("inf"))
@@ -371,9 +404,15 @@ class ICTrainer(BaseTrainer):
             target_func (function):
                 Target function
         """
-        return {k: v for k, v in kwargs.items() if k in inspect.signature(target_func).parameters.keys()}
+        return {
+            k: v
+            for k, v in kwargs.items()
+            if k in inspect.signature(target_func).parameters.keys()
+        }
 
-    def prepare_dataloader(self, dataset: Union[torch.utils.data.Dataset, Dataset], data_collator=None):
+    def prepare_dataloader(
+        self, dataset: Union[torch.utils.data.Dataset, Dataset], data_collator=None
+    ):
         """
         Prepare the dataloader for training.
 
@@ -493,7 +532,9 @@ class ICTrainer(BaseTrainer):
             )
             if generate_ref_response:
                 with self.optional_peft_ctx():
-                    ref_response = ref_model.generate(input_ids=query_tensor.unsqueeze(dim=0), **generation_kwargs)
+                    ref_response = ref_model.generate(
+                        input_ids=query_tensor.unsqueeze(dim=0), **generation_kwargs
+                    )
 
             if not return_prompt and not self.is_encoder_decoder:
                 response = response[:, query_tensor.shape[0] :]
@@ -543,7 +584,9 @@ class ICTrainer(BaseTrainer):
                 return_tensors="pt",
             ).to(self.current_device)
 
-            generations = self.accelerator.unwrap_model(model).generate(**padded_inputs, **generation_kwargs)
+            generations = self.accelerator.unwrap_model(model).generate(
+                **padded_inputs, **generation_kwargs
+            )
 
             for generation, mask in zip(generations, padded_inputs["attention_mask"]):
                 if not self.is_encoder_decoder:
@@ -589,11 +632,17 @@ class ICTrainer(BaseTrainer):
         Returns:
             `tuple`: The input processed data.
         """
-        for name, tensor_list in zip(["queries", "responses", "scores"], [queries, responses, scores]):
+        for name, tensor_list in zip(
+            ["queries", "responses", "scores"], [queries, responses, scores]
+        ):
             if not isinstance(tensor_list, list):
-                raise ValueError(f"{name} must be a list of tensors - got {type(tensor_list)}")
+                raise ValueError(
+                    f"{name} must be a list of tensors - got {type(tensor_list)}"
+                )
             if not isinstance(tensor_list[0], torch.Tensor):
-                raise ValueError(f"Elements in {name} must be tensors - got {type(tensor_list[0])}")
+                raise ValueError(
+                    f"Elements in {name} must be tensors - got {type(tensor_list[0])}"
+                )
             if batch_size is not None and len(tensor_list) != batch_size:
                 raise ValueError(
                     f"Batch size ({batch_size}) does not match number of examples - but got {len(tensor_list)} for: {name}"
@@ -603,12 +652,18 @@ class ICTrainer(BaseTrainer):
         queries = [tensor.to(self.current_device) for tensor in queries]
         responses = [tensor.to(self.current_device) for tensor in responses]
         scores = [tensor.to(self.current_device) for tensor in scores]
-        masks = [tensor.to(self.current_device) for tensor in masks] if masks is not None else None
+        masks = (
+            [tensor.to(self.current_device) for tensor in masks]
+            if masks is not None
+            else None
+        )
 
         # squeeze scores if needed
         for i, score in enumerate(scores):
             if score.dim() > 1:
-                raise ValueError(f"Scores must be 1-dimensional - got {score.dim()} for {score}")
+                raise ValueError(
+                    f"Scores must be 1-dimensional - got {score.dim()} for {score}"
+                )
             elif score.dim() == 1:
                 scores[i] = score.squeeze()
 
@@ -643,8 +698,7 @@ class ICTrainer(BaseTrainer):
         queries, responses, scores, response_masks = self._step_safety_checker(
             bs, queries, responses, scores, response_masks
         )
-        
-        
+
         # # if we want to push best model to the hub
         # if hasattr(self, "highest_reward"):
         #     if self.compare_step % self.config.compare_steps == 0:
@@ -677,23 +731,27 @@ class ICTrainer(BaseTrainer):
                 model_inputs["attention_mask"], dim=1, pad_index=0, pad_first=pad_first
             )
             if self.is_encoder_decoder:
-                model_inputs["decoder_input_ids"] = self.accelerator.pad_across_processes(
-                    model_inputs["decoder_input_ids"],
-                    dim=1,
-                    pad_index=self.tokenizer.pad_token_id,
-                    pad_first=pad_first,
+                model_inputs["decoder_input_ids"] = (
+                    self.accelerator.pad_across_processes(
+                        model_inputs["decoder_input_ids"],
+                        dim=1,
+                        pad_index=self.tokenizer.pad_token_id,
+                        pad_first=pad_first,
+                    )
                 )
-                model_inputs["decoder_attention_mask"] = self.accelerator.pad_across_processes(
-                    model_inputs["decoder_attention_mask"],
-                    dim=1,
-                    pad_index=0,
-                    pad_first=pad_first,
+                model_inputs["decoder_attention_mask"] = (
+                    self.accelerator.pad_across_processes(
+                        model_inputs["decoder_attention_mask"],
+                        dim=1,
+                        pad_index=0,
+                        pad_first=pad_first,
+                    )
                 )
 
         model_inputs_names = list(model_inputs.keys())
 
         # ref
-        
+
         with torch.no_grad():
             self.ref_model.eval()
             t = time.time()
@@ -703,9 +761,9 @@ class ICTrainer(BaseTrainer):
                     queries_ref,
                     responses,
                     model_ref_inputs,
-                    )
+                )
         timing["time/ppo/ref_logprob"] = time.time() - t
-                
+
         # upcast to float32 to avoid dataset issues
         batch_dict = {
             "queries": queries,
@@ -723,24 +781,35 @@ class ICTrainer(BaseTrainer):
                 break
             b_inds = np.random.permutation(bs)
             for backward_batch_start in range(0, bs, self.config.backward_batch_size):
-                backward_batch_end = backward_batch_start + self.config.backward_batch_size
+                backward_batch_end = (
+                    backward_batch_start + self.config.backward_batch_size
+                )
                 backward_batch_inds = b_inds[backward_batch_start:backward_batch_end]
 
-                for mini_batch_start in range(0, self.config.backward_batch_size, self.config.mini_batch_size):
+                for mini_batch_start in range(
+                    0, self.config.backward_batch_size, self.config.mini_batch_size
+                ):
                     mini_batch_end = mini_batch_start + self.config.mini_batch_size
-                    mini_batch_inds = backward_batch_inds[mini_batch_start:mini_batch_end]
+                    mini_batch_inds = backward_batch_inds[
+                        mini_batch_start:mini_batch_end
+                    ]
                     mini_batch_dict = {
                         "masks": batch_dict["masks"][mini_batch_inds],
                         # hacks: the queries and responses are ragged.
                         "queries": [batch_dict["queries"][i] for i in mini_batch_inds],
-                        "responses": [batch_dict["responses"][i] for i in mini_batch_inds],
-                        "ref_logprobs": [batch_dict["ref_logprobs"][i] for i in mini_batch_inds]
+                        "responses": [
+                            batch_dict["responses"][i] for i in mini_batch_inds
+                        ],
+                        "ref_logprobs": [
+                            batch_dict["ref_logprobs"][i] for i in mini_batch_inds
+                        ],
                     }
                     for k in model_inputs_names:
                         mini_batch_dict[k] = batch_dict[k][mini_batch_inds]
                     with self.accelerator.accumulate(self.model):
-                        model_inputs = {k: mini_batch_dict[k] for k in model_inputs_names}
-                        
+                        model_inputs = {
+                            k: mini_batch_dict[k] for k in model_inputs_names
+                        }
 
                         logprobs, logits, vpreds, _ = self.batched_forward_pass(
                             self.model,
@@ -751,9 +820,8 @@ class ICTrainer(BaseTrainer):
                         )
 
                         train_stats = self.train_minibatch(
-                            logprobs = logprobs,
-                            ref_logprobs = mini_batch_dict['ref_logprobs'],
-
+                            logprobs=logprobs,
+                            ref_logprobs=mini_batch_dict["ref_logprobs"],
                         )
                         all_stats.append(train_stats)
 
@@ -770,9 +838,15 @@ class ICTrainer(BaseTrainer):
         train_stats = stack_dicts(all_stats)
 
         # reshape advantages/ratios such that they are not averaged.
-        train_stats["policy/advantages"] = torch.flatten(train_stats["policy/advantages"]).unsqueeze(0)
-        train_stats["policy/advantages"] = torch.nan_to_num(train_stats["policy/advantages"], WANDB_PADDING)
-        train_stats["policy/ratio"] = torch.flatten(train_stats["policy/ratio"]).unsqueeze(0)
+        train_stats["policy/advantages"] = torch.flatten(
+            train_stats["policy/advantages"]
+        ).unsqueeze(0)
+        train_stats["policy/advantages"] = torch.nan_to_num(
+            train_stats["policy/advantages"], WANDB_PADDING
+        )
+        train_stats["policy/ratio"] = torch.flatten(
+            train_stats["policy/ratio"]
+        ).unsqueeze(0)
 
         stats = self.record_step_stats(
             scores=scores,
@@ -872,11 +946,17 @@ class ICTrainer(BaseTrainer):
     def prepare_model_inputs(self, queries: torch.Tensor, responses: torch.Tensor):
         if self.is_encoder_decoder:
             input_data = self.data_collator(
-                [{"input_ids": q, "attention_mask": torch.ones_like(q)} for q in input_data]
+                [
+                    {"input_ids": q, "attention_mask": torch.ones_like(q)}
+                    for q in input_data
+                ]
             ).to(self.current_device)
 
             decoder_inputs = self.data_collator(
-                [{"input_ids": r, "attention_mask": torch.ones_like(r)} for r in responses]
+                [
+                    {"input_ids": r, "attention_mask": torch.ones_like(r)}
+                    for r in responses
+                ]
             ).to(self.current_device)
 
             input_data["decoder_input_ids"] = decoder_inputs["input_ids"]
@@ -884,28 +964,44 @@ class ICTrainer(BaseTrainer):
         else:
             input_ids = [torch.cat([q, r]) for q, r in zip(queries, responses)]
             input_data = self.data_collator(
-                [{"input_ids": ids, "attention_mask": torch.ones_like(ids)} for ids in input_ids]
+                [
+                    {"input_ids": ids, "attention_mask": torch.ones_like(ids)}
+                    for ids in input_ids
+                ]
             ).to(self.current_device)
 
         input_data.pop("labels", None)  # we don't want to compute LM losses
         return input_data
 
-    def prepare_model_inputs_ref(self, queries: torch.Tensor, responses: torch.Tensor, contexts: torch.Tensor):
+    def prepare_model_inputs_ref(
+        self, queries: torch.Tensor, responses: torch.Tensor, contexts: torch.Tensor
+    ):
         if self.is_encoder_decoder:
             input_data = self.data_collator(
-                [{"input_ids": q, "attention_mask": torch.ones_like(q)} for q in queries]
+                [
+                    {"input_ids": q, "attention_mask": torch.ones_like(q)}
+                    for q in queries
+                ]
             ).to(self.current_device)
 
             decoder_inputs = self.data_collator(
-                [{"input_ids": r, "attention_mask": torch.ones_like(r)} for r in responses]
+                [
+                    {"input_ids": r, "attention_mask": torch.ones_like(r)}
+                    for r in responses
+                ]
             ).to(self.current_device)
 
             input_data["decoder_input_ids"] = decoder_inputs["input_ids"]
             input_data["decoder_attention_mask"] = decoder_inputs["attention_mask"]
         else:
-            input_ids = [torch.cat([q, c, r]) for q, c ,r in zip(queries, contexts, responses)]
+            input_ids = [
+                torch.cat([q, c, r]) for q, c, r in zip(queries, contexts, responses)
+            ]
             input_data = self.data_collator(
-                [{"input_ids": ids, "attention_mask": torch.ones_like(ids)} for ids in input_ids]
+                [
+                    {"input_ids": ids, "attention_mask": torch.ones_like(ids)}
+                    for ids in input_ids
+                ]
             ).to(self.current_device)
 
         input_data.pop("labels", None)  # we don't want to compute LM losses
@@ -946,7 +1042,10 @@ class ICTrainer(BaseTrainer):
         all_masks = []
 
         for i in range(math.ceil(bs / fbs)):
-            input_kwargs = {key: value[i * fbs : (i + 1) * fbs] for key, value in model_inputs.items()}
+            input_kwargs = {
+                key: value[i * fbs : (i + 1) * fbs]
+                for key, value in model_inputs.items()
+            }
             query_batch = queries[i * fbs : (i + 1) * fbs]
             response_batch = responses[i * fbs : (i + 1) * fbs]
             if response_masks is not None:
@@ -970,7 +1069,9 @@ class ICTrainer(BaseTrainer):
                     start = 1
                     end = attention_mask[j, :].sum() - 1
                 else:
-                    start = len(query_batch[j]) - 1  # logprobs starts from the second query token
+                    start = (
+                        len(query_batch[j]) - 1
+                    )  # logprobs starts from the second query token
                     if attention_mask[j, 0] == 0:  # offset left padding
                         start += attention_mask[j, :].nonzero()[0]
                     end = start + len(response_batch[j])
@@ -982,7 +1083,9 @@ class ICTrainer(BaseTrainer):
                 masks[j, :start] = 0
                 masks[j, end:] = 0
                 if response_masks is not None:
-                    masks[j, start:end] = masks[j, start:end] * response_masks_batch[j][start:end]
+                    masks[j, start:end] = (
+                        masks[j, start:end] * response_masks_batch[j][start:end]
+                    )
 
             if return_logits:
                 all_logits.append(logits)
@@ -1023,14 +1126,16 @@ class ICTrainer(BaseTrainer):
             train_stats (dict[str, `torch.Tensor`]):
                 Dictionary of training statistics
         """
-        
+
         self.model.train()
         loss, train_stats = self.loss(logprobs, ref_logprobs)
 
         self.accelerator.backward(loss)
         if self.config.max_grad_norm is not None:
             if self.accelerator.sync_gradients:
-                self.accelerator.clip_grad_norm_(self.model_params, self.config.max_grad_norm)
+                self.accelerator.clip_grad_norm_(
+                    self.model_params, self.config.max_grad_norm
+                )
         self.optimizer.step()
         # we call optimizer.zero_grad() every time and let `accelerator` handle accumulation
         # see https://huggingface.co/docs/accelerate/usage_guides/gradient_accumulation#the-finished-code
@@ -1046,9 +1151,10 @@ class ICTrainer(BaseTrainer):
         kl = self._kl_penalty(logprobs, ref_logprobs)
         stats = flatten_dict(dict(loss=dict(total=kl.detach())))
         return -kl, stats
-    
 
-    def _kl_penalty(self, logprob: torch.FloatTensor, ref_logprob: torch.FloatTensor) -> torch.FloatTensor:
+    def _kl_penalty(
+        self, logprob: torch.FloatTensor, ref_logprob: torch.FloatTensor
+    ) -> torch.FloatTensor:
         if self.config.kl_penalty == "kl":
             return logprob - ref_logprob
 
@@ -1060,11 +1166,12 @@ class ICTrainer(BaseTrainer):
 
         if self.config.kl_penalty == "full":
             # Flip is required due to this issue? :https://github.com/pytorch/pytorch/issues/57459
-            return F.kl_div(ref_logprob, logprob, log_target=True, reduction="none").sum(-1)
+            return F.kl_div(
+                ref_logprob, logprob, log_target=True, reduction="none"
+            ).sum(-1)
 
         raise NotImplementedError
 
-    
     def record_step_stats(self, kl_coef: float, **data):
         """
         Record training step statistics.
@@ -1114,19 +1221,29 @@ class ICTrainer(BaseTrainer):
         }
 
         # Log text properties
-        query_lens = torch.tensor([len(query) for query in data["queries"]], dtype=torch.float)
-        response_lens = torch.tensor([len(response) for response in data["responses"]], dtype=torch.float)
+        query_lens = torch.tensor(
+            [len(query) for query in data["queries"]], dtype=torch.float
+        )
+        response_lens = torch.tensor(
+            [len(response) for response in data["responses"]], dtype=torch.float
+        )
 
         stats["tokens/queries_len_mean"] = torch.mean(query_lens).cpu().numpy().item()
         stats["tokens/queries_len_std"] = torch.std(query_lens).cpu().numpy().item()
         stats["tokens/queries_dist"] = query_lens.cpu().numpy()
-        stats["tokens/responses_len_mean"] = torch.mean(response_lens).cpu().numpy().item()
-        stats["tokens/responses_len_std"] = torch.std(response_lens).cpu().numpy().item()
+        stats["tokens/responses_len_mean"] = (
+            torch.mean(response_lens).cpu().numpy().item()
+        )
+        stats["tokens/responses_len_std"] = (
+            torch.std(response_lens).cpu().numpy().item()
+        )
         stats["tokens/responses_dist"] = response_lens.cpu().numpy()
 
         for k, v in data["train_stats"].items():
             stats[f"ppo/{k}"] = torch.mean(v, axis=0)
-        stats["ppo/val/var_explained"] = 1 - stats["ppo/val/error"] / stats["ppo/returns/var"]
+        stats["ppo/val/var_explained"] = (
+            1 - stats["ppo/val/error"] / stats["ppo/returns/var"]
+        )
         return stats
 
     def log_stats(
@@ -1156,8 +1273,12 @@ class ICTrainer(BaseTrainer):
         if self.config.log_with == "wandb":
             import wandb
 
-            if any(column_to_log not in batch.keys() for column_to_log in columns_to_log):
-                raise ValueError(f"Columns to log {columns_to_log} are not present in the batch {batch.keys()}.")
+            if any(
+                column_to_log not in batch.keys() for column_to_log in columns_to_log
+            ):
+                raise ValueError(
+                    f"Columns to log {columns_to_log} are not present in the batch {batch.keys()}."
+                )
 
             batch_list = [batch[column_to_log] for column_to_log in columns_to_log]
             if self.is_distributed:
@@ -1180,7 +1301,13 @@ class ICTrainer(BaseTrainer):
                 )
             elif self.config.log_with == "wandb":
                 table_rows = [list(r) for r in zip(*batch_list, rewards.cpu().tolist())]
-                logs.update({"game_log": wandb.Table(columns=[*columns_to_log, "reward"], rows=table_rows)})
+                logs.update(
+                    {
+                        "game_log": wandb.Table(
+                            columns=[*columns_to_log, "reward"], rows=table_rows
+                        )
+                    }
+                )
 
             logs.update(stats)
 
@@ -1199,10 +1326,14 @@ class ICTrainer(BaseTrainer):
 
             self.accelerator.log(
                 logs,
-                step=self.current_step if self.config.log_with == "tensorboard" else None,
+                step=(
+                    self.current_step if self.config.log_with == "tensorboard" else None
+                ),
             )
 
-    def create_model_card(self, path: str, model_name: Optional[str] = "TRL Model") -> None:
+    def create_model_card(
+        self, path: str, model_name: Optional[str] = "TRL Model"
+    ) -> None:
         """Creates and saves a model card for a TRL model.
 
         Args:
@@ -1213,13 +1344,17 @@ class ICTrainer(BaseTrainer):
             user = whoami()["name"]
         # handle the offline case
         except Exception:
-            warnings.warn("Cannot retrieve user information assuming you are running in offline mode.")
+            warnings.warn(
+                "Cannot retrieve user information assuming you are running in offline mode."
+            )
             return
 
         if not os.path.exists(path):
             os.makedirs(path)
 
-        model_card_content = MODEL_CARD_TEMPLATE.format(model_name=model_name, model_id=f"{user}/{path}")
+        model_card_content = MODEL_CARD_TEMPLATE.format(
+            model_name=model_name, model_id=f"{user}/{path}"
+        )
         with open(os.path.join(path, "README.md"), "w", encoding="utf-8") as f:
             f.write(model_card_content)
 
@@ -1236,7 +1371,9 @@ class ICTrainer(BaseTrainer):
 
         for _i, (token, mask) in enumerate(zip(tokens, masks)):
             if mask == 1:
-                text.append(self.tokenizer.decode(token.item()), style="black on deep_sky_blue1")
+                text.append(
+                    self.tokenizer.decode(token.item()), style="black on deep_sky_blue1"
+                )
                 text.append(" ")
             else:
                 text.append(self.tokenizer.decode(token.item()), style="black on cyan3")
@@ -1254,14 +1391,21 @@ class ICTrainer(BaseTrainer):
                     if getattr(model.config, "hidden_sizes", None)
                     else getattr(model.config, "hidden_size", None)
                 )
-                if hidden_size is not None and config_kwargs["zero_optimization"]["stage"] == 3:
+                if (
+                    hidden_size is not None
+                    and config_kwargs["zero_optimization"]["stage"] == 3
+                ):
                     # Note that `stage3_prefetch_bucket_size` can produce DeepSpeed messages like: `Invalidate trace cache @ step 0: expected module 1, but got module 0`
                     # This is expected and is not an error, see: https://github.com/microsoft/DeepSpeed/discussions/4081
                     config_kwargs.update(
                         {
-                            "zero_optimization.reduce_bucket_size": hidden_size * hidden_size,
-                            "zero_optimization.stage3_param_persistence_threshold": 10 * hidden_size,
-                            "zero_optimization.stage3_prefetch_bucket_size": 0.9 * hidden_size * hidden_size,
+                            "zero_optimization.reduce_bucket_size": hidden_size
+                            * hidden_size,
+                            "zero_optimization.stage3_param_persistence_threshold": 10
+                            * hidden_size,
+                            "zero_optimization.stage3_prefetch_bucket_size": 0.9
+                            * hidden_size
+                            * hidden_size,
                         }
                     )
 
