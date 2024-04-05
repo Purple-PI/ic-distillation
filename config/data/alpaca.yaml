@@ -1,2 +1,9 @@
 path: tatsu-lab/alpaca
 preprocessing_num_workers: "8"
+n_icl: 3
+header: 
+template:
+  header: "Below are examples of instructions that describe a task, with a response that appropriately completes the request.\n\n"
+  instruction_template: "### Instruction:\n$instruction\n\n"
+  response_template: "### Response:\n$response\n\n"
+  input_template: "### Input:\n$input\n\n"

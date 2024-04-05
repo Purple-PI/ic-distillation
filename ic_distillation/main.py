@@ -20,6 +20,7 @@ from pathlib import Path
 from typing import Optional
 
 import hydra
+import numpy as np
 import torch
 from accelerate import Accelerator
 from datasets import load_dataset, load_from_disk
@@ -30,8 +31,9 @@ from tqdm import tqdm
 from transformers import AutoModel, AutoTokenizer, HfArgumentParser, pipeline, set_seed
 from trl.core import LengthSampler
 from trl.import_utils import is_npu_available, is_xpu_available
-from trl.trainer import PPOConfig
+from trl.trainer import PPOConfig, PPOTrainer
 
+from ic_distillation.preprocessing import ICLDataCollator
 from ic_distillation.utils import get_env
 
 tqdm.pandas()
@@ -45,7 +47,7 @@ def main(cfg):
     dataset = load_from_disk(DATA_PATH / cfg.data_path)
 
     # set seed before initializing value head for deterministic eval
-    set_seed(cfg.training.seed)
+    set_seed(cfg.seed)
 
     # Now let's build the model, the reference model, and the tokenizer.
     if not cfg.peft.use_peft:
@@ -54,8 +56,8 @@ def main(cfg):
         peft_config = None
     else:
         peft_config = LoraConfig(
-            r=args.lora_r,
-            lora_alpha=args.lora_alpha,
+            r=cfg.peft.lora_r,
+            lora_alpha=cfg.peft.lora_alpha,
             bias="none",
             task_type="CAUSAL_LM",
         )
@@ -64,20 +66,29 @@ def main(cfg):
         device_map = {"": Accelerator().local_process_index}
 
     model = AutoModel.from_pretrained(
-        ppo_config.model_name,
-        trust_remote_code=args.trust_remote_code,
+        cfg.model.path,
+        trust_remote_code=True,
         device_map=device_map,
         peft_config=peft_config,
     )
 
-    tokenizer = AutoTokenizer.from_pretrained(ppo_config.model_name)
+    tokenizer = AutoTokenizer.from_pretrained(cfg.model.path)
+
+    collator = ICLDataCollator(
+        tokenizer=tokenizer,
+        dataset=dataset,
+        sampler=np.random.default_rng(cfg.seed),
+        template=cfg.data.template,
+        n_icl=cfg.data.n_icl,
+        max_length=cfg.model.max_length,
+    )
 
     # Some tokenizers like GPT-2's don't have a padding token by default, so we set one here.
     tokenizer.pad_token_id = tokenizer.eos_token_id
 
     # We then build the PPOTrainer, passing the model, the reference model, the tokenizer
     ppo_trainer = PPOTrainer(
-        ppo_config, model, ref_model, tokenizer, dataset=dataset, data_collator=collator
+        cfg.ppo, model, ref_model, tokenizer, dataset=dataset, data_collator=collator
     )
 
     # We then build the sentiment analysis pipeline, passing the model name and the
@@ -94,43 +105,27 @@ def main(cfg):
                 0 if torch.cuda.is_available() else "cpu"
             )  # to avoid a `pipeline` bug
     ds_plugin = ppo_trainer.accelerator.state.deepspeed_plugin
-    task, model_name = ppo_config.reward_model.split(":")
+    task, model_name = cfg.ppo.reward_model.split(":")
 
     # We then define the arguments to pass to the `generate` function. These arguments
     # are passed to the `generate` function of the PPOTrainer, which is a wrapper around
     # the `generate` function of the trained model.
-    generation_kwargs = {
-        "min_length": -1,
-        "top_k": 0.0,
-        "top_p": 1.0,
-        "do_sample": True,
-        "pad_token_id": tokenizer.eos_token_id,
-        "max_new_tokens": 32,
-    }
+    generation_kwargs = cfg.training.generation
+    generation_kwargs.pad_token_id = tokenizer.pad_token_id
 
-    for _epoch, batch in tqdm(enumerate(ppo_trainer.dataloader)):
-        query_tensors = batch["input_ids"]
-        query_ref_tensors = [torch.cat([q, c, r]) for q, c, r in zip(queries, contexts)]
+    for epoch in range(cfg.training.num_epochs):
+        for batch in tqdm(ppo_trainer.train_dataloader):
+            icl_batch, instruction_batch = batch
+            query_tensor = icl_batch["input_ids"].to(device)
 
-    # sample examples from training set
+            response_tensors = ppo_trainer.model.generate(
+                query_tensor, **generation_kwargs
+            )
+            batch["response"] = [
+                tokenizer.decode(r.squeeze()) for r in response_tensors
+            ]
 
-    # 1 Generate response given query
-    response_tensors, ref_response_tensors = ppo_trainer.generate(
-        query_tensors,
-        return_prompt=False,
-        generate_ref_response=True,
-        **generation_kwargs
-    )
-    # 2 Create Incontext queries
-    # query_ref <= query + example
-
-    batch["response"] = tokenizer.batch_decode(response_tensors)
-
-    texts = [q + r for q, r in zip(batch["query"], batch["response"])]
-
-    # Run PPO step
-    stats = ppo_trainer.step(query_tensors, response_tensors, query_ref_tensors)
-    # ppo_trainer.log_stats(stats, batch, columns_to_log=["query", "response", "ref_response", "ref_rewards"])
+            ppo_trainer.train_step(batch)
 
 
 if __name__ == "__main__":

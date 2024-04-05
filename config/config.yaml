@@ -1,5 +1,7 @@
 defaults:
   - data: alpaca
-  - alignment: ppo
+  - training: ppo
   - peft: llora
   - model: tiny_llama
+
+seed: 12345
