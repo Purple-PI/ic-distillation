@@ -1,6 +1,6 @@
 defaults:
-  - model: pythia
-  - model@secondary: pythia
+  - model: llama7b
+  - model@secondary: llama7b
 
 seed: 12345
 generation:
