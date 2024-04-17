@@ -1,0 +1,11 @@
+defaults:
+  - model: pythia
+  - model@secondary: pythia
+
+seed: 12345
+generation:
+  dtype: bf16
+  attn_implementation: "eager"
+  contrastive_alpha: 0.5
+
+model_type: contrastive
