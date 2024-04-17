@@ -26,7 +26,7 @@ class ContextDataCollator:
 
     def format_prompt_str(self, x):
 
-        prompt_str = f"{x['context']} {x['question']}"
+        prompt_str = f"{x['context']}.\n\nQuestion:\n{x['question']}\n\nResponse:\n"
 
         return prompt_str
 
@@ -54,7 +54,7 @@ class ContextDataCollator:
 @dataclass
 class NoContextDataCollator(ContextDataCollator):
     def format_prompt_str(self, x):
-        prompt_str = x["question"]
+        prompt_str = f"Question:\n{x['question']}\n\nResponse:\n"
         return prompt_str
 
 
